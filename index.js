@@ -13,6 +13,7 @@ require('dotenv').config();
 
 const {
   Client,
+  Events,
   GatewayIntentBits,
   Partials,
   EmbedBuilder,
@@ -236,7 +237,7 @@ async function handleMapleRanksVerification(message) {
 }
 
 // Event: Bot ready
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(`📌 Verification Channel: ${config.VERIFICATION_CHANNEL_ID}`);
   console.log(`📌 Logs Channel: ${config.LOGS_CHANNEL_ID}`);
