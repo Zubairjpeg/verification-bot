@@ -203,7 +203,38 @@ User ID: 123456789012345678
 
 ## Deployment
 
-### Using PM2 (Recommended)
+### Using Railway (Recommended)
+
+1. **Create a new project** on [Railway](https://railway.app)
+
+2. **Connect your GitHub repository** or deploy from the CLI:
+   ```bash
+   # Install Railway CLI
+   npm install -g @railway/cli
+
+   # Login
+   railway login
+
+   # Initialize and deploy
+   railway init
+   railway up
+   ```
+
+3. **Add environment variable** in Railway dashboard:
+   - Go to your project → Variables
+   - Add `DISCORD_TOKEN` with your bot token
+
+4. **Deploy** - Railway will automatically:
+   - Detect Node.js
+   - Install dependencies
+   - Start the bot using `npm start`
+
+5. **View logs** in Railway dashboard or CLI:
+   ```bash
+   railway logs
+   ```
+
+### Using PM2
 
 ```bash
 # Install PM2 globally
