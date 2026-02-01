@@ -1,6 +1,6 @@
 /**
  * OCR Module for MapleStory Screenshot Processing
- * Uses Tesseract.js with multiple preprocessing strategies for game UI text
+ * Supports Google Cloud Vision (recommended) and Tesseract.js (fallback)
  */
 
 const Tesseract = require('tesseract.js');
@@ -9,21 +9,18 @@ const https = require('https');
 const http = require('http');
 const config = require('./config');
 
-// Tesseract worker instance (reused for performance)
+// Tesseract worker instance
 let worker = null;
 
 /**
- * Initialize Tesseract worker with optimized settings for game text
+ * Initialize Tesseract worker
  */
 async function initWorker() {
   if (worker) return worker;
 
   worker = await Tesseract.createWorker(config.OCR_LANGUAGE);
-
-  // Set parameters optimized for game UI text
   await worker.setParameters({
-    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.:',
-    tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT, // Better for scattered text
+    tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
   });
 
   console.log('✅ Tesseract worker initialized');
@@ -32,14 +29,12 @@ async function initWorker() {
 
 /**
  * Download image from URL to buffer
- * @param {string} url - Image URL
- * @returns {Promise<Buffer>} Image buffer
  */
 async function downloadImage(url) {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
 
-    protocol.get(url, (response) => {
+    const request = protocol.get(url, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         return downloadImage(response.headers.location).then(resolve).catch(reject);
       }
@@ -52,155 +47,154 @@ async function downloadImage(url) {
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('end', () => resolve(Buffer.concat(chunks)));
       response.on('error', reject);
-    }).on('error', reject);
+    });
+
+    request.on('error', reject);
+    request.setTimeout(30000, () => {
+      request.destroy();
+      reject(new Error('Image download timeout'));
+    });
   });
 }
 
 /**
- * Create multiple preprocessed versions of the image for better OCR
- * @param {Buffer} imageBuffer - Raw image buffer
- * @returns {Promise<Buffer[]>} Array of processed image buffers
+ * Call Google Cloud Vision API for OCR
+ */
+async function googleVisionOCR(imageBuffer) {
+  const apiKey = process.env.GOOGLE_CLOUD_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+
+  const base64Image = imageBuffer.toString('base64');
+
+  const requestBody = JSON.stringify({
+    requests: [{
+      image: { content: base64Image },
+      features: [{ type: 'TEXT_DETECTION', maxResults: 10 }],
+    }],
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'vision.googleapis.com',
+      path: `/v1/images:annotate?key=${apiKey}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(requestBody),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          if (response.responses?.[0]?.fullTextAnnotation?.text) {
+            resolve({
+              text: response.responses[0].fullTextAnnotation.text,
+              confidence: 95, // Google Vision is highly accurate
+            });
+          } else if (response.responses?.[0]?.textAnnotations?.[0]?.description) {
+            resolve({
+              text: response.responses[0].textAnnotations[0].description,
+              confidence: 95,
+            });
+          } else {
+            resolve(null);
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(requestBody);
+    req.end();
+  });
+}
+
+/**
+ * Create preprocessed image variants for Tesseract
  */
 async function createPreprocessedVariants(imageBuffer) {
   const variants = [];
+  const metadata = await sharp(imageBuffer).metadata();
+  const scale = Math.min(2, 3000 / metadata.width);
 
-  // Get original image
-  const original = sharp(imageBuffer);
-  const metadata = await original.metadata();
-
-  // Variant 1: High contrast grayscale
-  const variant1 = await sharp(imageBuffer)
-    .resize(Math.min(metadata.width * 2, 3000)) // Upscale for better OCR
+  // Variant 1: High contrast
+  variants.push(await sharp(imageBuffer)
+    .resize(Math.round(metadata.width * scale))
     .grayscale()
-    .linear(2.0, -128) // High contrast
+    .linear(2.5, -180)
     .sharpen({ sigma: 2 })
     .png()
-    .toBuffer();
-  variants.push(variant1);
+    .toBuffer());
 
-  // Variant 2: Threshold (black/white) - good for outlined text
-  const variant2 = await sharp(imageBuffer)
-    .resize(Math.min(metadata.width * 2, 3000))
+  // Variant 2: Threshold black/white
+  variants.push(await sharp(imageBuffer)
+    .resize(Math.round(metadata.width * scale))
     .grayscale()
-    .threshold(180) // Convert to pure black/white
+    .threshold(160)
     .png()
-    .toBuffer();
-  variants.push(variant2);
+    .toBuffer());
 
-  // Variant 3: Inverted threshold - catches light text on dark backgrounds
-  const variant3 = await sharp(imageBuffer)
-    .resize(Math.min(metadata.width * 2, 3000))
+  // Variant 3: Inverted for light text
+  variants.push(await sharp(imageBuffer)
+    .resize(Math.round(metadata.width * scale))
     .grayscale()
-    .threshold(100)
-    .negate() // Invert colors
+    .threshold(120)
+    .negate()
     .png()
-    .toBuffer();
-  variants.push(variant3);
+    .toBuffer());
 
-  // Variant 4: Enhanced with normalize
-  const variant4 = await sharp(imageBuffer)
-    .resize(Math.min(metadata.width * 2, 3000))
+  // Variant 4: Moderate processing
+  variants.push(await sharp(imageBuffer)
+    .resize(Math.round(metadata.width * scale))
     .grayscale()
     .normalize()
-    .linear(1.8, -50)
-    .sharpen({ sigma: 1.5 })
+    .linear(1.5, -30)
     .png()
-    .toBuffer();
-  variants.push(variant4);
-
-  // Variant 5: Extract specific color ranges (for yellow level badge)
-  // Yellow text: high R, high G, low B
-  const variant5 = await sharp(imageBuffer)
-    .resize(Math.min(metadata.width * 2, 3000))
-    .recomb([
-      [0.5, 0.5, -0.5],  // Enhance yellow/orange
-      [0.5, 0.5, -0.5],
-      [0.5, 0.5, -0.5],
-    ])
-    .grayscale()
-    .normalize()
-    .threshold(150)
-    .png()
-    .toBuffer();
-  variants.push(variant5);
+    .toBuffer());
 
   return variants;
 }
 
 /**
- * Extract text from a single image buffer
- * @param {Buffer} imageBuffer - Processed image buffer
- * @returns {Promise<{text: string, confidence: number}>}
+ * Run Tesseract OCR on image variants
  */
-async function ocrSingleImage(imageBuffer) {
+async function tesseractOCR(imageBuffer) {
   await initWorker();
-  const { data } = await worker.recognize(imageBuffer);
-  return {
-    text: data.text,
-    confidence: data.confidence,
-  };
-}
 
-/**
- * Extract text using multiple preprocessing strategies
- * @param {string} imageUrl - URL of the image to process
- * @returns {Promise<{text: string, confidence: number, allTexts: string[]}>}
- */
-async function extractText(imageUrl) {
-  try {
-    await initWorker();
+  const variants = await createPreprocessedVariants(imageBuffer);
+  const results = [];
 
-    // Download image
-    const rawImage = await downloadImage(imageUrl);
-
-    // Create multiple preprocessed variants
-    const variants = await createPreprocessedVariants(rawImage);
-
-    // Run OCR on all variants
-    const results = [];
-    for (const variant of variants) {
-      try {
-        const result = await ocrSingleImage(variant);
-        results.push(result);
-      } catch (e) {
-        console.error('OCR variant failed:', e.message);
-      }
+  for (const variant of variants) {
+    try {
+      const { data } = await worker.recognize(variant);
+      results.push({ text: data.text, confidence: data.confidence });
+    } catch (e) {
+      console.error('Tesseract variant failed:', e.message);
     }
-
-    // Combine all text for parsing
-    const allTexts = results.map(r => r.text);
-    const combinedText = allTexts.join('\n');
-
-    // Use best confidence
-    const bestConfidence = Math.max(...results.map(r => r.confidence), 0);
-
-    return {
-      text: combinedText,
-      confidence: bestConfidence,
-      allTexts,
-    };
-  } catch (error) {
-    console.error('OCR extraction error:', error);
-    throw new Error(`OCR failed: ${error.message}`);
   }
+
+  if (results.length === 0) {
+    return { text: '', confidence: 0 };
+  }
+
+  // Combine all text
+  const combinedText = results.map(r => r.text).join('\n');
+  const bestConfidence = Math.max(...results.map(r => r.confidence));
+
+  return { text: combinedText, confidence: bestConfidence };
 }
 
 /**
- * Parse OCR text to extract class and level information
- * Enhanced patterns for MapleStory game text
- * @param {string} text - Raw OCR text
- * @returns {{class: string|null, level: number|null, rawText: string}}
+ * Parse OCR text to extract class and level
  */
 function parseOCRText(text) {
-  // Normalize text: lowercase, remove extra spaces, handle common OCR errors
-  const normalizedText = text
-    .toLowerCase()
-    .replace(/[|!1l]/g, (m) => {
-      // Context-sensitive replacement for common OCR misreads
-      return m;
-    })
-    .replace(/\s+/g, ' ')
-    .trim();
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
 
   const result = {
     class: null,
@@ -208,40 +202,37 @@ function parseOCRText(text) {
     rawText: text,
   };
 
-  // Enhanced class detection with common OCR misreads
+  // Class detection patterns (including OCR misreads)
   const classPatterns = [
     /\bkain\b/i,
-    /\bkam\b/i,      // OCR misread
-    /\bkaln\b/i,     // OCR misread
-    /\bkaim\b/i,     // OCR misread
-    /\bkajn\b/i,     // OCR misread
-    /\bka[il1]n\b/i, // OCR misread with 1/l/i
+    /\bkam\b/i,
+    /\bkaln\b/i,
+    /\bkaim\b/i,
+    /\bka[il1]n\b/i,
+    /\bkein\b/i,
+    /\bkajn\b/i,
   ];
 
   for (const pattern of classPatterns) {
-    if (pattern.test(normalizedText)) {
+    if (pattern.test(normalized)) {
       result.class = 'kain';
       break;
     }
   }
 
-  // Enhanced level extraction patterns
+  // Level detection patterns
   const levelPatterns = [
-    /lv\.?\s*(\d{2,3})/gi,          // Lv.260, Lv 260
-    /lv[:\s]*(\d{2,3})/gi,          // Lv:260
-    /level\s*[:\s]*(\d{2,3})/gi,    // Level 260
-    /lvl\.?\s*(\d{2,3})/gi,         // Lvl.260
-    /[il1]v\.?\s*(\d{2,3})/gi,      // OCR misread: 1v.260, iv.260
-    /(\d{3})\s*(?:lv|level)/gi,     // 260 Lv
-    /(?:^|\s)(\d{3})(?:\s|$)/gm,    // Standalone 3-digit on its own line
+    /lv\.?\s*(\d{2,3})/gi,
+    /level\s*:?\s*(\d{2,3})/gi,
+    /lvl\.?\s*(\d{2,3})/gi,
+    /[il1]v\.?\s*(\d{2,3})/gi,
   ];
 
   const levels = [];
-
   for (const pattern of levelPatterns) {
     pattern.lastIndex = 0;
     let match;
-    while ((match = pattern.exec(normalizedText)) !== null) {
+    while ((match = pattern.exec(normalized)) !== null) {
       const level = parseInt(match[1], 10);
       if (level >= 200 && level <= 300) {
         levels.push(level);
@@ -249,59 +240,72 @@ function parseOCRText(text) {
     }
   }
 
-  // Also scan for any 3-digit numbers in valid range
-  const allNumbers = normalizedText.match(/\d{3}/g) || [];
-  for (const numStr of allNumbers) {
-    const num = parseInt(numStr, 10);
-    if (num >= 200 && num <= 300) {
-      levels.push(num);
+  // Find standalone 3-digit numbers in valid range
+  const numbers = normalized.match(/\b(\d{3})\b/g) || [];
+  for (const num of numbers) {
+    const level = parseInt(num, 10);
+    if (level >= 200 && level <= 300) {
+      levels.push(level);
     }
   }
 
-  // Take the highest valid level (most likely the character level)
   if (levels.length > 0) {
     result.level = Math.max(...levels);
   }
 
-  // Debug output
-  console.log('[OCR Debug] Normalized text sample:', normalizedText.substring(0, 500));
-  console.log('[OCR Debug] Found levels:', levels);
-  console.log('[OCR Debug] Class detected:', result.class);
+  console.log('[OCR Parse] Text sample:', normalized.substring(0, 300));
+  console.log('[OCR Parse] Detected - Class:', result.class, '| Level:', result.level);
 
   return result;
 }
 
 /**
- * Process image and extract MapleStory character info
- * @param {string} imageUrl - URL of the screenshot
- * @returns {Promise<{class: string|null, level: number|null, confidence: number, rawText: string}>}
+ * Main function to process screenshot
  */
 async function processScreenshot(imageUrl) {
-  const { text, confidence, allTexts } = await extractText(imageUrl);
-  const parsed = parseOCRText(text);
+  console.log('[OCR] Processing:', imageUrl);
 
-  // If first pass failed, try parsing each variant's text individually
-  if (!parsed.class || !parsed.level) {
-    for (const variantText of allTexts) {
-      const variantParsed = parseOCRText(variantText);
-      if (!parsed.class && variantParsed.class) {
-        parsed.class = variantParsed.class;
+  // Download image
+  const imageBuffer = await downloadImage(imageUrl);
+  console.log('[OCR] Downloaded image:', imageBuffer.length, 'bytes');
+
+  let ocrResult = null;
+  let method = 'tesseract';
+
+  // Try Google Cloud Vision first (if API key is set)
+  if (process.env.GOOGLE_CLOUD_API_KEY) {
+    try {
+      console.log('[OCR] Trying Google Cloud Vision...');
+      ocrResult = await googleVisionOCR(imageBuffer);
+      if (ocrResult) {
+        method = 'google_vision';
+        console.log('[OCR] Google Vision succeeded');
       }
-      if (!parsed.level && variantParsed.level) {
-        parsed.level = variantParsed.level;
-      }
-      if (parsed.class && parsed.level) break;
+    } catch (e) {
+      console.error('[OCR] Google Vision failed:', e.message);
     }
   }
 
+  // Fallback to Tesseract
+  if (!ocrResult) {
+    console.log('[OCR] Using Tesseract...');
+    ocrResult = await tesseractOCR(imageBuffer);
+  }
+
+  console.log('[OCR] Confidence:', ocrResult.confidence, '| Method:', method);
+
+  // Parse the text
+  const parsed = parseOCRText(ocrResult.text);
+
   return {
     ...parsed,
-    confidence,
+    confidence: ocrResult.confidence,
+    method,
   };
 }
 
 /**
- * Cleanup Tesseract worker
+ * Cleanup
  */
 async function cleanup() {
   if (worker) {
@@ -313,10 +317,10 @@ async function cleanup() {
 
 module.exports = {
   initWorker,
-  extractText,
-  parseOCRText,
   processScreenshot,
+  parseOCRText,
   cleanup,
-  createPreprocessedVariants,
   downloadImage,
+  googleVisionOCR,
+  tesseractOCR,
 };
