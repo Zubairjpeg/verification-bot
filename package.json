@@ -1,13 +1,29 @@
 {
-  "name": "verification-bot",
+  "name": "maplestory-kain-verification-bot",
   "version": "1.0.0",
+  "description": "Discord bot that verifies MapleStory Kain players using OCR and MapleRanks bot parsing",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "maplestory",
+    "verification",
+    "ocr",
+    "kain"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "dotenv": "^16.0.3",
-    "tesseract.js": "^4.0.2"
+    "dotenv": "^16.3.1",
+    "sharp": "^0.33.2",
+    "tesseract.js": "^5.0.4"
   }
 }
