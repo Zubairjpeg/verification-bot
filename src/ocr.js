@@ -63,9 +63,11 @@ async function downloadImage(url) {
 async function googleVisionOCR(imageBuffer) {
   const apiKey = process.env.GOOGLE_CLOUD_API_KEY;
   if (!apiKey) {
+    console.log('[Google Vision] No API key configured');
     return null;
   }
 
+  console.log('[Google Vision] API key found, making request...');
   const base64Image = imageBuffer.toString('base64');
 
   const requestBody = JSON.stringify({
@@ -90,26 +92,53 @@ async function googleVisionOCR(imageBuffer) {
       res.on('end', () => {
         try {
           const response = JSON.parse(data);
-          if (response.responses?.[0]?.fullTextAnnotation?.text) {
+
+          // Log any errors from Google Vision
+          if (response.error) {
+            console.error('[Google Vision] API Error:', response.error.message);
+            resolve(null);
+            return;
+          }
+
+          if (response.responses?.[0]?.error) {
+            console.error('[Google Vision] Response Error:', response.responses[0].error.message);
+            resolve(null);
+            return;
+          }
+
+          // Get the text
+          const fullText = response.responses?.[0]?.fullTextAnnotation?.text;
+          const textAnnotation = response.responses?.[0]?.textAnnotations?.[0]?.description;
+
+          if (fullText) {
+            console.log('[Google Vision] Success! Found text:', fullText.substring(0, 100));
             resolve({
-              text: response.responses[0].fullTextAnnotation.text,
-              confidence: 95, // Google Vision is highly accurate
+              text: fullText,
+              confidence: 95,
             });
-          } else if (response.responses?.[0]?.textAnnotations?.[0]?.description) {
+          } else if (textAnnotation) {
+            console.log('[Google Vision] Success (annotations)! Found text:', textAnnotation.substring(0, 100));
             resolve({
-              text: response.responses[0].textAnnotations[0].description,
+              text: textAnnotation,
               confidence: 95,
             });
           } else {
+            console.log('[Google Vision] No text found in image');
+            console.log('[Google Vision] Full response:', JSON.stringify(response).substring(0, 500));
             resolve(null);
           }
         } catch (e) {
+          console.error('[Google Vision] Parse error:', e.message);
           reject(e);
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (e) => {
+      console.error('[Google Vision] Request error:', e.message);
+      reject(e);
+    });
+
     req.write(requestBody);
     req.end();
   });
