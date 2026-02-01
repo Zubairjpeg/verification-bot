@@ -194,7 +194,13 @@ async function tesseractOCR(imageBuffer) {
  * Parse OCR text to extract class and level
  */
 function parseOCRText(text) {
+  // Log the FULL raw text for debugging
+  console.log('[OCR Parse] Full raw text:\n---\n' + text + '\n---');
+
+  // Multiple normalization approaches
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  const noSpaces = text.toLowerCase().replace(/\s+/g, '');
+  const lettersAndNumbers = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
 
   const result = {
     class: null,
@@ -202,50 +208,66 @@ function parseOCRText(text) {
     rawText: text,
   };
 
-  // Class detection patterns (including OCR misreads)
+  // Class detection - check all text variants
   const classPatterns = [
-    /\bkain\b/i,
-    /\bkam\b/i,
-    /\bkaln\b/i,
-    /\bkaim\b/i,
-    /\bka[il1]n\b/i,
-    /\bkein\b/i,
-    /\bkajn\b/i,
+    /kain/i,
+    /ka[il1!|]n/i,  // OCR variations
+    /kam/i,
+    /kaln/i,
   ];
 
+  const allText = normalized + ' ' + noSpaces + ' ' + lettersAndNumbers;
   for (const pattern of classPatterns) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(allText)) {
       result.class = 'kain';
       break;
     }
   }
 
-  // Level detection patterns
-  const levelPatterns = [
-    /lv\.?\s*(\d{2,3})/gi,
-    /level\s*:?\s*(\d{2,3})/gi,
-    /lvl\.?\s*(\d{2,3})/gi,
-    /[il1]v\.?\s*(\d{2,3})/gi,
+  // Level detection - very aggressive patterns
+  const levels = [];
+
+  // Pattern 1: Lv followed by numbers (with anything in between)
+  const lvPatterns = [
+    /lv[^0-9]*(\d{3})/gi,       // Lv.264, Lv 264, Lv:264, etc
+    /lv[^0-9]*(\d{2})/gi,       // Lv.64 (in case leading 2 is missed)
+    /level[^0-9]*(\d{2,3})/gi,  // Level 264
   ];
 
-  const levels = [];
-  for (const pattern of levelPatterns) {
+  for (const pattern of lvPatterns) {
     pattern.lastIndex = 0;
     let match;
-    while ((match = pattern.exec(normalized)) !== null) {
-      const level = parseInt(match[1], 10);
+    while ((match = pattern.exec(allText)) !== null) {
+      let level = parseInt(match[1], 10);
+      // If it's 2 digits and 60-99, assume it's 260-299
+      if (level >= 40 && level <= 99) {
+        level = 200 + level;
+      }
       if (level >= 200 && level <= 300) {
         levels.push(level);
+        console.log('[OCR Parse] Found level via pattern:', level, 'from match:', match[0]);
       }
     }
   }
 
-  // Find standalone 3-digit numbers in valid range
-  const numbers = normalized.match(/\b(\d{3})\b/g) || [];
-  for (const num of numbers) {
-    const level = parseInt(num, 10);
-    if (level >= 200 && level <= 300) {
+  // Pattern 2: Any 3-digit number in range 200-300
+  const threeDigitMatches = text.match(/\d{3}/g) || [];
+  for (const numStr of threeDigitMatches) {
+    const num = parseInt(numStr, 10);
+    if (num >= 200 && num <= 300) {
+      levels.push(num);
+      console.log('[OCR Parse] Found 3-digit level:', num);
+    }
+  }
+
+  // Pattern 3: Look for "2" followed by "6" followed by digits (for 260+)
+  const twoSixPattern = /2\s*6\s*(\d)/g;
+  let match;
+  while ((match = twoSixPattern.exec(text)) !== null) {
+    const level = parseInt('26' + match[1], 10);
+    if (level >= 260 && level <= 269) {
       levels.push(level);
+      console.log('[OCR Parse] Found 26x level:', level);
     }
   }
 
@@ -253,8 +275,8 @@ function parseOCRText(text) {
     result.level = Math.max(...levels);
   }
 
-  console.log('[OCR Parse] Text sample:', normalized.substring(0, 300));
-  console.log('[OCR Parse] Detected - Class:', result.class, '| Level:', result.level);
+  console.log('[OCR Parse] All found levels:', levels);
+  console.log('[OCR Parse] Final - Class:', result.class, '| Level:', result.level);
 
   return result;
 }
