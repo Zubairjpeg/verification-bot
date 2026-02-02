@@ -266,8 +266,16 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // Debug: Log all bot messages to find MapleRanks bot ID
+  if (message.author.bot) {
+    console.log(`[DEBUG] Bot message from: ${message.author.username} (ID: ${message.author.id})`);
+    console.log(`[DEBUG] Expected MapleRanks ID: ${config.MAPLERANKS_BOT_ID}`);
+    console.log(`[DEBUG] Has embeds: ${message.embeds?.length > 0}`);
+  }
+
   // Handle MapleRanks bot messages
   if (verifier.isMapleRanksMessage(message)) {
+    console.log('[MapleRanks] Detected MapleRanks message, processing...');
     await handleMapleRanksVerification(message);
     return;
   }
