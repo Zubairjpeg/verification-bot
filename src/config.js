@@ -14,7 +14,7 @@ module.exports = {
   REQUIRED_LEVEL: 240,
 
   // MapleRanks bot ID (official MapleRanks Discord bot)
-  MAPLERANKS_BOT_ID: '571433717834711040',
+  MAPLERANKS_BOT_ID: '895756174891302962',
 
   // Anti-abuse settings
   COOLDOWN_MS: 5 * 60 * 1000, // 5 minutes in milliseconds
