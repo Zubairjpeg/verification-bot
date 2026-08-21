@@ -76,19 +76,24 @@ function formatCooldownTime(remainingMs) {
 
 /**
  * Check if user is already verified
+ *
+ * The Discord role is always the source of truth. The in-memory cache is
+ * only a fast-path hint for other lookups (e.g. stats) -- it used to be
+ * checked *before* the role and returned immediately on a hit, which meant
+ * once someone was cached as verified, nothing short of a process restart
+ * could un-stick that if the role was later removed some other way (a
+ * manual edit in Discord, a failed /verify unverify retried differently,
+ * etc). Every call now re-syncs the cache to match the real role instead of
+ * trusting a possibly-stale cache entry.
  * @param {Object} member - Discord guild member
  * @returns {boolean}
  */
 function isAlreadyVerified(member) {
-  // Check cache first
-  if (verifiedUsersCache.has(member.id)) {
-    return true;
-  }
-
-  // Check roles
   const hasRole = member.roles.cache.has(config.VERIFIED_ROLE_ID);
   if (hasRole) {
     verifiedUsersCache.add(member.id);
+  } else {
+    verifiedUsersCache.delete(member.id);
   }
   return hasRole;
 }
