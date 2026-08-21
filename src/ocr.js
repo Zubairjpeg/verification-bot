@@ -220,6 +220,44 @@ async function tesseractOCR(imageBuffer) {
 }
 
 /**
+ * Levenshtein edit distance between two short strings.
+ */
+function editDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+/**
+ * Check whether `haystack` contains a substring within `maxDistance` edits
+ * of `needle`. Slides a window of needle.length (+/-1, to absorb a dropped
+ * or inserted character too) across the haystack. Only intended for short
+ * needles (a handful of characters) -- this is O(haystack length * needle
+ * length) per window size, which is fine at that scale.
+ */
+function fuzzyContains(haystack, needle, maxDistance) {
+  for (const windowLen of [needle.length - 1, needle.length, needle.length + 1]) {
+    if (windowLen < 1 || windowLen > haystack.length) continue;
+    for (let i = 0; i + windowLen <= haystack.length; i++) {
+      const window = haystack.slice(i, i + windowLen);
+      if (editDistance(window, needle) <= maxDistance) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Parse OCR text to extract class and level
  */
 function parseOCRText(text) {
@@ -258,9 +296,21 @@ function parseOCRText(text) {
   // patterns above can match. lettersAndNumbers strips non a-z0-9 characters
   // so it drops these glyphs -- check the original text/normalized text
   // instead, which still contain them.
+  //
+  // Exact substring matching isn't enough on its own: confirmed from a real
+  // verification attempt, Google Vision read the Traditional Chinese client's
+  // "凱恩" as "凱殷" -- a one-character OCR misread (恩 -> 殷), similar-looking
+  // glyphs. An exact CLASS_ALIASES match would silently reject a valid
+  // screenshot in that case. Since these aliases are short (2-4 CJK/Hangul
+  // characters), also scan for any same-length substring of the OCR text
+  // that's within edit distance 1 of the alias, to absorb single-glyph OCR
+  // noise without opening the door to unrelated text matching.
   if (!result.class && config.CLASS_ALIASES) {
     for (const aliases of Object.values(config.CLASS_ALIASES)) {
-      const matched = aliases.some((alias) => text.includes(alias) || normalized.includes(alias));
+      const matched = aliases.some((alias) => {
+        if (text.includes(alias) || normalized.includes(alias)) return true;
+        return fuzzyContains(text, alias, 1) || fuzzyContains(normalized, alias, 1);
+      });
       if (matched) {
         result.class = 'kain';
         break;
