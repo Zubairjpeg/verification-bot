@@ -253,6 +253,21 @@ function parseOCRText(text) {
     }
   }
 
+  // Non-English clients spell "Kain" using other scripts entirely (e.g. the
+  // Korean and Traditional Chinese clients), which none of the Latin-script
+  // patterns above can match. lettersAndNumbers strips non a-z0-9 characters
+  // so it drops these glyphs -- check the original text/normalized text
+  // instead, which still contain them.
+  if (!result.class && config.CLASS_ALIASES) {
+    for (const aliases of Object.values(config.CLASS_ALIASES)) {
+      const matched = aliases.some((alias) => text.includes(alias) || normalized.includes(alias));
+      if (matched) {
+        result.class = 'kain';
+        break;
+      }
+    }
+  }
+
   // Level detection - very aggressive patterns
   const levels = [];
 

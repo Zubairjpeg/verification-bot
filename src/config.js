@@ -23,7 +23,14 @@ module.exports = {
   ALLOWED_EXTENSIONS: ['.png', '.jpg', '.jpeg', '.webp'],
 
   // OCR settings
-  OCR_LANGUAGE: 'eng',
+  // Google Cloud Vision (the primary OCR engine, see src/ocr.js) reads
+  // non-English scripts natively with no language config needed. This
+  // OCR_LANGUAGE setting only affects the Tesseract fallback used when
+  // GOOGLE_CLOUD_API_KEY isn't set or the Vision call fails -- without these,
+  // that fallback would be blind to non-English screenshots even though the
+  // class-matching below now knows what to look for. Add more Tesseract
+  // language codes here if other locales come up (e.g. 'jpn' for Japanese).
+  OCR_LANGUAGE: 'eng+chi_tra+kor',
 
   // Image preprocessing settings
   IMAGE_PREPROCESSING: {
@@ -36,6 +43,17 @@ module.exports = {
 
   // Keywords for OCR detection
   CLASS_KEYWORDS: ['kain'],
+
+  // Localized spellings of "Kain" as they appear in non-English game
+  // clients. OCR (Vision or Tesseract) can read these scripts fine, but the
+  // class-matching patterns in src/ocr.js only checked English spellings, so
+  // non-English screenshots always failed with "Could not detect class" even
+  // when the level OCR'd correctly. Confirmed from real verification
+  // attempts: '凱恩' (Traditional Chinese client) and '카인' (Korean client,
+  // KMS). Add more locales here as they come up.
+  CLASS_ALIASES: {
+    kain: ['凱恩', '카인'],
+  },
   LEVEL_KEYWORDS: ['lv', 'lv.', 'level', 'lvl'],
 
   // Regex patterns for level extraction
